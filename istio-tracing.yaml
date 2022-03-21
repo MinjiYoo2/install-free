@@ -1,0 +1,475 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jaeger-service-account
+  namespace: istio-system
+  labels:
+    app: jaeger
+---
+apiVersion: v1
+kind: Secret
+metadata:
+    name: jaeger-service-token
+    namespace: istio-system
+    annotations:
+        kubernetes.io/service-account.name: jaeger-service-account
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jaeger-istio-system
+  labels:
+    app: jaeger
+rules:
+  - apiGroups: ["extensions", "apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "delete", "update"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch", "create", "delete", "update"]
+---
+
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: jaeger-istio-system
+subjects:
+  - kind: ServiceAccount
+    name: jaeger-service-account
+    namespace: istio-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jaeger-istio-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jaeger-configuration
+  namespace: istio-system
+  labels:
+    app: jaeger
+    app.kubernetes.io/name: jaeger
+data:
+  span-storage-type: opensearch
+  collector: |
+    es:
+      server-urls: https://opensearch.opensearch.svc:9200
+      tls:
+        ca: /os/cert/ca.crt
+        skip-host-verify: true
+      username: admin
+      password: admin
+    collector:
+      zipkin:
+        http-port: 9411
+  query: |
+    es:
+      server-urls: https://opensearch.opensearch.svc:9200
+      tls:
+        ca: /os/cert/ca.crt
+        skip-host-verify: true
+      username: admin
+      password: admin
+  agent: |
+    collector:
+      host-port: "jaeger-collector:14267"
+---
+#
+# Copyright 2017-2019 The Jaeger Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: istio-system
+  name: jaeger-collector
+  labels:
+    app: jaeger
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: collector
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        app.kubernetes.io/name: jaeger
+        app.kubernetes.io/component: collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "14268"
+    spec:
+      serviceAccountName: jaeger-service-account
+      containers:
+        - image: docker.io/jaegertracing/jaeger-collector:1.27
+          name: jaeger-collector
+          args: ["--config-file=/conf/collector.yaml"]
+          ports:
+            - containerPort: 14267
+              protocol: TCP
+            - containerPort: 14268
+              protocol: TCP
+            - containerPort: 9411
+              protocol: TCP
+            - containerPort: 14269
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 14269
+          volumeMounts:
+            - name: jaeger-configuration-volume
+              mountPath: /conf
+            - name: jaeger-service-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: os-cert
+              mountPath: /os/cert
+              readOnly: true
+          env:
+            - name: SPAN_STORAGE_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: jaeger-configuration
+                  key: span-storage-type
+      volumes:
+        - name: jaeger-service-token
+          secret:
+            defaultMode: 420
+            secretName: jaeger-service-token
+        - name: os-cert
+          secret:
+            defaultMode: 420
+            secretName: opensearch-cert
+        - configMap:
+            name: jaeger-configuration
+            items:
+              - key: collector
+                path: collector.yaml
+          name: jaeger-configuration-volume
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: istio-system
+  name: jaeger-collector
+  labels:
+    app: jaeger
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: collector
+spec:
+  ports:
+    - name: jaeger-collector-tchannel
+      port: 14267
+      protocol: TCP
+      targetPort: 14267
+    - name: jaeger-collector-http
+      port: 14268
+      protocol: TCP
+      targetPort: 14268
+    - name: jaeger-collector-zipkin
+      port: 9411
+      protocol: TCP
+      targetPort: 9411
+  selector:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: collector
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin
+  labels:
+    app: jaeger
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: zipkin
+spec:
+  ports:
+    - name: jaeger-collector-zipkin
+      port: 9411
+      protocol: TCP
+      targetPort: 9411
+  selector:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: collector
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+  labels:
+    app: jaeger
+    app.kubernetes.io/component: query
+    app.kubernetes.io/name: jaeger
+  name: jaeger-query
+  namespace: istio-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        prometheus.io/port: "16686"
+        prometheus.io/scrape: "true"
+      creationTimestamp: null
+      labels:
+        app: jaeger
+        app.kubernetes.io/component: query
+        app.kubernetes.io/name: jaeger
+    spec:
+      serviceAccountName: jaeger-service-account
+      containers:
+      - name: gatekeeper
+        image: quay.io/keycloak/keycloak-gatekeeper:10.0.0
+        imagePullPolicy: Always
+        args:
+        - --client-id=jaeger
+        - --client-secret=b99b7c5a-bb09-457e-b8cb-4179d276ee7e
+        - --listen=:3000
+        - --upstream-url=http://127.0.0.1:16686
+        - --discovery-url=https://hyperauth.tmaxcloud.org/auth/realms/tmax
+        - --secure-cookie=false
+        - --skip-openid-provider-tls-verify=true
+        - --enable-self-signed-tls=false
+        - --tls-cert=/etc/secrets/tls.crt
+        - --tls-private-key=/etc/secrets/tls.key
+        - --tls-ca-certificate=/etc/secrets/ca.crt
+        - --skip-upstream-tls-verify=true
+        - --upstream-keepalives=false
+        - --enable-default-deny=true
+        - --enable-refresh-tokens=true
+        - --enable-metrics=true
+        - --encryption-key=AgXa7xRcoClDEU0ZDSH4X0XhL5Qy2Z2j
+        - --forbidden-page=/html/access-forbidden.html
+        - --resources=uri=/*|roles=jaeger:jaeger-manager
+        - --verbose
+        ports:
+        - containerPort: 3000
+          name: gatekeeper
+          protocol: TCP
+        volumeMounts:
+        - name: gatekeeper-files
+          mountPath: /html
+        - name: secret
+          mountPath: /etc/secrets
+          readOnly: true
+      - args:
+        - --config-file=/conf/query.yaml
+        env:
+        - name: SPAN_STORAGE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              key: span-storage-type
+              name: jaeger-configuration
+        - name: QUERY_BASE_PATH
+          value: /api/jaeger
+        image: docker.io/jaegertracing/jaeger-query:1.27
+        imagePullPolicy: IfNotPresent
+        name: jaeger-query
+        ports:
+        - containerPort: 16686
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: 16687
+            scheme: HTTP
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 4
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /conf
+          name: jaeger-configuration-volume
+        - name: os-cert
+          mountPath: /os/cert
+          readOnly: true
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: jaeger-service-token
+        secret:
+          defaultMode: 420
+          secretName: jaeger-service-token
+      - name: secret
+        secret:
+          defaultMode: 420
+          secretName: jaeger-secret
+      - name : gatekeeper-files
+        configMap:
+          name: gatekeeper-files
+      - name: os-cert
+        secret:
+          defaultMode: 420
+          secretName: opensearch-cert
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: query
+            path: query.yaml
+          name: jaeger-configuration
+        name: jaeger-configuration-volume
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    traefik.ingress.kubernetes.io/service.serverstransport: tmaxcloud@file
+  labels:
+    app: jaeger
+    app.kubernetes.io/component: query
+    app.kubernetes.io/name: jaeger
+  name: jaeger-query
+  namespace: istio-system
+spec:
+  ports:
+  - name: jaeger-query
+    port: 443
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app.kubernetes.io/component: query
+    app.kubernetes.io/name: jaeger
+  type: ClusterIP
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jaeger-cert
+  namespace: istio-system
+spec:
+  secretName: jaeger-secret
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  dnsNames:
+    - "tmax-cloud"
+    - "jaeger-query.istio-system.svc"
+  issuerRef:
+    kind: ClusterIssuer
+    group: cert-manager.io
+    name: tmaxcloud-issuer
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger-ingress
+  namespace: istio-system
+  labels:
+    ingress.tmaxcloud.org/name: jaeger
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    cert-manager.io/cluster-issuer: tmaxcloud-issuer
+spec:
+  ingressClassName: tmax-cloud
+  tls:
+  - hosts:
+    - jaeger.tmaxcloud.org
+  rules:
+    - host: jaeger.tmaxcloud.org
+      http:
+        paths:
+        - backend:
+            service:
+              name: jaeger-query
+              port:
+                number: 443
+          path: /
+          pathType: Prefix
+  tls:
+  - hosts:
+    - jaeger.tmaxcloud.org
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: istio-system
+  name: jaeger-agent
+  labels:
+    app: jaeger
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        app.kubernetes.io/name: jaeger
+        app.kubernetes.io/component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5778"
+    spec:
+      serviceAccountName: jaeger-service-account 
+      containers:
+        - image: docker.io/jaegertracing/jaeger-agent:1.9
+          name: jaeger-agent
+          args: ["--config-file=/conf/agent.yaml"]
+          volumeMounts:
+            - name: jaeger-configuration-volume
+              mountPath: /conf
+            - name: jaeger-service-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          ports:
+            - containerPort: 5775
+              protocol: UDP
+            - containerPort: 6831
+              protocol: UDP
+            - containerPort: 6832
+              protocol: UDP
+            - containerPort: 5778
+              protocol: TCP
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      volumes:
+        - name: jaeger-service-token
+          secret:
+            defaultMode: 420
+            secretName: jaeger-service-token
+        - configMap:
+            name: jaeger-configuration
+            items:
+              - key: agent
+                path: agent.yaml
+          name: jaeger-configuration-volume
