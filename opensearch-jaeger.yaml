@@ -15,6 +15,31 @@ metadata:
     kubernetes.io/service-account.name: jaeger-service-account
 type: kubernetes.io/service-account-token   
 ---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jaeger-cert
+  namespace: istio-system
+spec:
+  secretName: jaeger-secret
+  commonName: "jaeger"
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS8
+    size: 2048
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  dnsNames:
+    - "tmax-cloud"
+    - "jaeger-query.istio-system.svc"
+  issuerRef:
+    kind: ClusterIssuer
+    group: cert-manager.io
+    name: tmaxcloud-issuer
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -387,29 +412,3 @@ spec:
               - key: agent
                 path: agent.yaml
           name: jaeger-configuration-volume
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: jaeger-cert
-  namespace: istio-system
-spec:
-  secretName: jaeger-secret
-  commonName: "jaeger"
-  privateKey:
-    algorithm: RSA
-    encoding: PKCS8
-    size: 2048
-  usages:
-    - digital signature
-    - key encipherment
-    - server auth
-    - client auth
-  dnsNames:
-    - "tmax-cloud"
-    - "jaeger-query.istio-system.svc"
-  issuerRef:
-    kind: ClusterIssuer
-    group: cert-manager.io
-    name: tmaxcloud-issuer
----
