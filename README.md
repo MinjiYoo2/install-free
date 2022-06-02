@@ -9,9 +9,14 @@
 - 01_elasticsearch.yaml : elasticsearch with minikube 
 
   https://github.com/tmax-cloud/install-EFK
+  
+- es-jaeger.yaml : elasticsearch v7.2.1 - jaeger v1.27 연동 install yaml
 
 ## istio-1.12
 - base.yaml : istio-base
+
 - istiod.yaml : istio-core
+
 - IngressGateway.yaml : ingressgateway
-=> kubernetes v1.19 & v1.22
+
+  => kubernetes v1.19 & v1.22
