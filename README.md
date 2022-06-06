@@ -12,6 +12,10 @@
   
 - es-jaeger.yaml : elasticsearch v7.2.1 - jaeger v1.27 연동 install yaml
 
+- nginx-ingress-system.yaml : 기존에 사용하던 설치 버전 v0.33.0 ( extensions deprecated)
+
+- ingress-nginx.yaml : latest version (k8s v1.22) 
+
 ## istio-1.12
 - base.yaml : istio-base
 
