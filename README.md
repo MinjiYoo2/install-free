@@ -24,3 +24,10 @@
 - IngressGateway.yaml : ingressgateway
 
   => kubernetes v1.19 & v1.22
+
+## istio-1.5.1
+
+- 1.istio-base.yaml : istio-base
+- 3.istio-core.yaml : istiod
+- 4.istio-ingressgateway.yaml : istio-ingressgateway
+
