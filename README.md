@@ -16,6 +16,8 @@
 
 - ingress-nginx.yaml : latest version (k8s v1.22) 
 
+- jaeger-opensearch-with-gatekeeper.yaml : jaeger-opensearch 연동 gatekeeper설정 포함 실환경 배포 yaml
+
 ## istio-1.12
 - base.yaml : istio-base
 
